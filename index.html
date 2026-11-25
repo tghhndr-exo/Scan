@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scan attendance</title>
+<style>
+  body { margin:0; font-family:Arial,Helvetica,sans-serif; background:#f1f3f4; color:#202124; }
+  .wrap { max-width:560px; margin:0 auto; padding:16px; text-align:center; }
+  h1 { font-size:22px; margin:8px 0 12px; }
+  button { font-size:18px; padding:14px 22px; margin:8px 4px; border:0; border-radius:10px; background:#1a73e8; color:#fff; cursor:pointer; }
+  #reader { width:100%; max-width:420px; margin:10px auto; background:#000; border-radius:12px; overflow:hidden; min-height:60px; }
+  #result { margin-top:16px; padding:22px 12px; border-radius:14px; color:#fff; display:none; }
+  #result .st { font-size:34px; font-weight:bold; }
+  #result .nm { font-size:26px; margin-top:8px; }
+  #result .dt { font-size:20px; margin-top:6px; }
+  .ok { background:#1e8e3e; } .late { background:#e8710a; } .dup { background:#5f6368; }
+  .err { background:#c5221f; } .wait { background:#1a73e8; }
+  #hint { color:#5f6368; font-size:14px; margin-top:6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Hold your QR card in front of the camera</h1>
+  <div id="reader"></div>
+  <button id="camBtn" onclick="startCamera()" style="display:none">Start camera</button>
+  <div id="hint">Allow the camera when your browser asks.</div>
+  <div id="result"><div class="st"></div><div class="nm"></div><div class="dt"></div></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script>
+  // STEP: paste your Apps Script Web app URL (ends with /exec) between the quotes.
+  const API = 'https://script.google.com/macros/s/AKfycbzSoF9JmpNxlRe2NI6FzNlW48YQuDWiBp_wC5Sy-IeYaoGCbVgoCNSYWnh-XwC8KepU/exec';
+
+  // The secret key comes from the link after the # sign, e.g. ...github.io/scan/#key=abc123
+  const m = /key=([A-Za-z0-9]+)/.exec(location.hash);
+  if (m) { try { localStorage.setItem('kioskKey', m[1]); } catch (e) {} }
+  let KEY = m ? m[1] : '';
+  if (!KEY) { try { KEY = localStorage.getItem('kioskKey') || ''; } catch (e) {} }
+
+  const box = document.getElementById('result');
+  const btn = document.getElementById('camBtn');
+  let busy = false, lastCode = '', lastAt = 0, scanner = null;
+
+  function startCamera() {
+    btn.style.display = 'none';
+    scanner = new Html5Qrcode('reader');
+    scanner.start(
+      { facingMode: 'environment' },
+      { fps: 10, qrbox: function (w, h) { const s = Math.floor(Math.min(w, h) * 0.7); return { width: s, height: s }; } },
+      function (text) { submit(text); },
+      function () {}
+    ).catch(function () {
+      scanner = null;
+      btn.style.display = 'inline-block';
+      show('err', 'CAMERA NOT AVAILABLE', '', 'Tap "Start camera" and choose Allow. Open this page in Chrome or Safari.');
+      setTimeout(function () { box.style.display = 'none'; }, 8000);
+    });
+  }
+
+  function submit(code) {
+    code = (code || '').trim();
+    if (!code) return;
+    if (!KEY) { show('err', 'NO KEY', '', 'Open the full scan link that ends with #key=...'); return; }
+    const now = Date.now();
+    if (busy || (code === lastCode && now - lastAt < 5000)) return;
+    busy = true; lastCode = code; lastAt = now;
+    show('wait', 'Checking...', '', '');
+    fetch(API + '?page=api&id=' + encodeURIComponent(code) + '&key=' + encodeURIComponent(KEY))
+      .then(function (r) { return r.json(); })
+      .then(showResult)
+      .catch(function () {
+        showResult({ ok: false, code: 'ERROR', message: 'Could not reach the server. Try again.' });
+      });
+  }
+
+  function showResult(r) {
+    if (r.ok) {
+      const late = r.status === 'Late';
+      show(late ? 'late' : 'ok', late ? 'LATE' : 'ON TIME',
+           r.name + (r.cls ? ' (' + r.cls + ')' : ''), 'Arrived at ' + r.time);
+    } else if (r.code === 'DUPLICATE') {
+      show('dup', 'ALREADY SCANNED', r.name || '', r.message || '');
+    } else if (r.code === 'NO_SCHOOL') {
+      show('dup', 'NO SCHOOL TODAY', '', r.detail || '');
+    } else {
+      show('err', 'NOT RECORDED', '', r.message || 'Error');
+    }
+    setTimeout(function () { box.style.display = 'none'; busy = false; }, 3500);
+  }
+
+  function show(cls, st, nm, dt) {
+    box.className = cls;
+    box.style.display = 'block';
+    box.querySelector('.st').textContent = st;
+    box.querySelector('.nm').textContent = nm;
+    box.querySelector('.dt').textContent = dt;
+  }
+
+  startCamera();
+</script>
+</body>
+</html>
